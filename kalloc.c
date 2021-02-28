@@ -13,14 +13,23 @@ void freerange(void *vstart, void *vend);
 extern char end[]; // first address after kernel loaded from ELF file
                    // defined by the kernel linker script in kernel.ld
 
-struct run {
-  struct run *next;
+/*node structure for queue*/
+struct node {
+  struct node *next;
 };
+
+
+/*queue data structure*/
+struct queue{
+	struct node *front, *rear;
+};
+
+
 
 struct {
   struct spinlock lock;
   int use_lock;
-  struct run *freelist;
+  struct queue freelist;
 } kmem;
 
 // Initialization happens in two phases.
@@ -28,11 +37,17 @@ struct {
 // the pages mapped by entrypgdir on free list.
 // 2. main() calls kinit2() with the rest of the physical pages
 // after installing a full page table that maps them on all cores.
+
 void
 kinit1(void *vstart, void *vend)
 {
   initlock(&kmem.lock, "kmem");
   kmem.use_lock = 0;
+
+  /*intializing front and rear of queue to null */
+  kmem.freelist.front = kmem.freelist.rear = 0;
+
+
   freerange(vstart, vend);
 }
 
@@ -51,15 +66,20 @@ freerange(void *vstart, void *vend)
   for(; p + PGSIZE <= (char*)vend; p += PGSIZE)
     kfree(p);
 }
+
+
+
 //PAGEBREAK: 21
 // Free the page of physical memory pointed at by v,
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
 // initializing the allocator; see kinit above.)
+
+
 void
 kfree(char *v)
 {
-  struct run *r;
+  struct node *r;
 
   if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
     panic("kfree");
@@ -69,9 +89,20 @@ kfree(char *v)
 
   if(kmem.use_lock)
     acquire(&kmem.lock);
-  r = (struct run*)v;
-  r->next = kmem.freelist;
-  kmem.freelist = r;
+  
+  r = (struct node*)v;
+  r->next = 0;
+
+  if(kmem.freelist.front && kmem.freelist.rear){
+  	(kmem.freelist.rear)->next = r;
+	kmem.freelist.rear = r;
+  }
+
+  /* empty queue */
+  else{
+  	kmem.freelist.front = kmem.freelist.rear = r;
+  }
+
   if(kmem.use_lock)
     release(&kmem.lock);
 }
@@ -79,16 +110,26 @@ kfree(char *v)
 // Allocate one 4096-byte page of physical memory.
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
+
+
 char*
 kalloc(void)
 {
-  struct run *r;
+  struct node *r;
 
   if(kmem.use_lock)
     acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
+  
+  r = kmem.freelist.front;
+  
+  /*check for non empty queue*/
+  if(r){
+  	if(kmem.freelist.front == kmem.freelist.rear)
+		kmem.freelist.rear = 0;
+	kmem.freelist.front = r->next;
+	r->next = 0;
+  }
+  
   if(kmem.use_lock)
     release(&kmem.lock);
   return (char*)r;
